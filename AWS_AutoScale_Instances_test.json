@@ -1,0 +1,395 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS EC2 AutoScale Instance with ELB",
+  "Parameters": {
+    "InstanceType": {
+      "Description": "AppServer EC2 instance",
+      "Type": "String",
+      "Default": "t2.micro"
+    },
+    
+    "KeyName" : {
+      "Description" : "The EC2 Key Pair to allow SSH access to the instances",
+      "Type" : "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair."
+    },
+    
+    "SSHLocation" : {
+      "Description" : "The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "0.0.0.0/0",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+    },
+    
+    "userpass" : {
+      "Description" : "Password for App User",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "18",
+      "NoEcho" : "true",
+      "ConstraintDescription": "must be alphanumeric password. Minimum eight characters and maximum eighteen."
+    },
+    
+    "Env": {
+            "Type": "String",
+            "Default": "Test",
+            "AllowedValues": ["Test", "Staging", "Prod"],
+            "ConstraintDescription": "Enter Environment: Test or Staging or Prod "
+    }, 
+    
+    "ServerCapacity": {
+      "Default": "1",
+      "Description" : "The initial nuber of Server instances",
+      "Type": "Number",
+      "MinValue": "1",
+      "MaxValue": "5",
+      "ConstraintDescription" : "must be between 1 and 5 EC2 instances."
+    },
+    
+    "S3AccessKey": {
+            "Type": "String",
+            "NoEcho" : "true"
+    }, 
+    
+    "S3SecretAccessKey": {
+            "Type": "String",
+            "NoEcho" : "true"
+    },
+    
+    "AWSAccessKey": {
+            "Type": "String",
+            "NoEcho" : "true"
+    }, 
+    
+    "AWSSecretAccessKey": {
+            "Type": "String",
+            "NoEcho" : "true"
+    }
+  },
+  "Mappings": {
+    "RegionMap": {
+            "us-east-1" : {
+                "AMI" : "ami-2051294a"
+            },
+            "us-west-1" : {
+                "AMI" : "ami-d1315fb1"
+            },
+            "us-west-2" : {
+                "AMI" : "ami-775e4f16"
+            }
+        },
+   
+    "AWSInstanceType2Arch": {
+
+      "t2.micro": {
+        "Arch": "HVM64"
+      }
+
+    },
+    "AWSInstanceType2NATArch": {
+
+      "t2.micro": {
+        "Arch": "NATHVM64"
+      }
+
+    },
+    "AWSRegionArch2AMI": {
+      "us-east-1"        : {"PV64" : "ami-22111148", "HVM64" : "ami-2051294a", "HVMG2" : "ami-ebcec381"},
+      "us-west-1"        : {"PV64" : "ami-792bc219", "HVM64" : "ami-d1315fb1", "HVMG2" : "ami-0f28c06f"},
+      "us-west-2"        : {"PV64" : "ami-0e087a6e", "HVM64" : "ami-775e4f16", "HVMG2" : "ami-ab9defcb"}
+      
+    }
+  },
+  
+
+
+  "Resources": {
+  
+    "ElasticLoadBalancer" : {
+      "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties" : {
+        "AvailabilityZones" : { "Fn::GetAZs" : "" },
+        "CrossZone" : "true",
+        "Listeners" : [ {
+          "LoadBalancerPort" : "80",
+          "InstancePort" : "4567",
+          "Protocol" : "HTTP"
+        } ],
+        "HealthCheck" : {
+          "Target" : "HTTP:4567/",
+          "HealthyThreshold" : "2",
+          "UnhealthyThreshold" : "5",
+          "Interval" : "10",
+          "Timeout" : "5"
+        }
+      }
+    },
+    
+    "AppServerAutoScalingGroup": {
+    "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : { "Fn::GetAZs" : "" },
+        "LaunchConfigurationName" : { "Ref" : "LaunchConfig" },
+        "MinSize" : "1",
+        "MaxSize" : "2",
+        "DesiredCapacity" : { "Ref" : "ServerCapacity" },
+        "LoadBalancerNames" : [ { "Ref" : "ElasticLoadBalancer" } ]
+      },
+      
+    "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT15M",
+          "Count"   : { "Ref" : "ServerCapacity" }
+        }
+      }
+    },
+    
+    
+    "AppServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable ALL access",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "-1",
+            "FromPort": "-1",
+            "ToPort": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+   
+    "LaunchConfig": {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata": {
+        "AWS::CloudFormation::Init": {
+          "configSets": {
+            "full_install": [ "base" , "install-cfn", "install-java" ]
+          },
+          "base": {
+            "packages": {
+              "yum": {
+                "gcc": [],
+                "gcc-c++": [],
+                "make": [],
+                "openssl": [],
+                "git": [],
+                "httpd": [],
+                "python": [],
+                "curl": [],
+                "wget": [],
+                "unzip": [],
+                "rubygems": []
+              }
+            },
+        	"services" : {
+              "sysvinit" : {  
+                "httpd"   : { "enabled" : "true", "ensureRunning" : "true" }
+              }
+            }
+          },
+           
+          "install-java": {
+            
+            "commands": {
+              
+                "javainstall": {
+                "command": "rpm -Uvh /home/ec2-user/jdk-8u92-linux-x64.rpm"
+                
+              },
+              
+               "changepermissions": {
+               "command": "chown -R appuser:appuser /apps"
+               }
+            } 
+            
+            },
+            
+            "install-cfn" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              
+             "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource LaunchConfig ",
+                  "         --configsets install_all ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            },
+
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
+                              "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"]}
+              }
+            }
+          }
+
+		},
+		
+		"AWS::CloudFormation::Authentication": {
+    	"S3Credentials": {
+        "type": "S3",
+        "accessKeyId": { "Ref": "S3AccessKey" },
+        "secretKey": { "Ref": "S3SecretAccessKey" }
+    }
+	}
+      },
+      "Properties": {
+        "ImageId": { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+                                          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+        "InstanceType": { "Ref" : "InstanceType" },
+        "BlockDeviceMappings" : [
+         {
+           "DeviceName" : "/dev/sda1",
+           "Ebs" : { "VolumeSize" : "10", "VolumeType" : "standard", "DeleteOnTermination" : "true" } 
+         },
+        {
+           "DeviceName" : "/dev/sdb",
+           "Ebs" : { "VolumeSize" : "8", "VolumeType" : "standard", "DeleteOnTermination" : "false" } 
+         }
+      	],
+        "SecurityGroups": [ { "Ref": "AppServerSecurityGroup" } ],
+		"KeyName"        : { "Ref" : "KeyName" },
+        "UserData": { "Fn::Base64": { "Fn::Join": [ "", [
+                "#!/usr/bin/bash -xe\n",
+                "echo `whoami` \n",
+                "# Install httpd, wget and perl \n",
+                "yum -y install httpd\n",
+                "yum -y install wget\n",
+                "yum -y install perl\n",
+                
+                
+                "#Install aws cfn helper scripts\n",
+                "cd /home/ec2-user\n",
+                "#wget https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm\n",
+                "wget -q https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.zip\n",
+                "wget -q https://s3.amazonaws.com/install-files-standard/jdk-8u92-linux-x64.rpm \n",
+                
+                
+                "# First enable EPEL\n",
+                "rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm", "\n",
+	           
+	            "# Now install Python Setuptools(easy_install) and Pip", "\n",
+	            "yum -y install python-pip", "\n",
+	          
+	            "# Now install cfn scripts", "\n",
+	  		    "/bin/easy_install --script-dir /opt/aws/bin https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz", "\n",
+	   			
+	   			"# Now fix the cfn-hup script and copy to init.d location as AWS does not do it for you", "\n",
+	   			"cp -f `pip show aws-cfn-bootstrap 2>/dev/null | grep Location | awk '{print $2}'`/init/redhat/cfn-hup /etc/init.d/", "\n",
+	    		"chmod 755 /etc/init.d/cfn-hup", "\n",
+	    		"chkconfig --add cfn-hup", "\n",
+               
+                "#yum update -y aws-cfn-bootstrap\n",
+                
+                "#Create filesystem on new EBS Volume\n",
+                "mkfs -t ext4 /dev/xvdb\n",
+                
+                "#Create Mount point from new filesystem\n",
+                "mkdir /apps\n",
+                "mount /dev/xvdb /apps\n",
+                
+                "#Create app user \n",
+                "password=", {"Ref" : "userpass" }, " \n",
+                
+                "crypt_password=$(perl -e 'print crypt(\"$password\",\"secret\")')\n",
+                "useradd appuser -p $crypt_password \n",
+                
+                "/opt/aws/bin/cfn-init -v ",
+                "         --stack ", { "Ref": "AWS::StackId" },
+                "         --resource LaunchConfig ",
+                "         --configsets full_install ",
+                "         --access-key ",  {"Ref": "AWSAccessKey"},
+                "         --secret-key ", {"Ref": "AWSSecretAccessKey"},
+                "         --region ", { "Ref" : "AWS::Region" }, "|| error_exit 'Failed to run cfn-init'\n",
+               
+                " #Update fstab to auto mount /apps\n",
+                " cp /etc/fstab /etc/fstab.orig \n",
+                " echo '/dev/xvdb /apps defaults 0 0' >> /etc/fstab \n",
+                
+                "#Install Sinatra for ruby app to work\n",
+                " gem install sinatra \n",
+                
+                "#Create ssh keys \n",
+                " if [[ ! -d /home/appuser/.ssh ]] ; then mkdir /home/appuser/.ssh \n",
+                " fi \n",
+                " cd /home/appuser/.ssh; chmod 700 /home/appuser/.ssh \n",
+                " cp /home/ec2-user/.ssh/authorized_keys /home/appuser/.ssh/\n",
+                " chmod 700 /home/appuser/.ssh/authorized_keys \n",
+                " chown -R appuser:appuser /home/appuser/ \n",
+                
+                " #wget https://s3.amazonaws.com/install-files-standard/id_rsa.pub \n",
+                " #if [ ! -f /home/appuser/.ssh/authorized_keys ]] ; then \n",
+                " #cat id_rsa.pub >> authorized_keys \n",
+                " #fi \n",
+                
+                
+                "#Enable Password Authentication \n",
+                " cp /etc/ssh/sshd_config /etc/ssh/sshd_config.orig \n",
+                " perl -pi -e 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config \n",
+                " service sshd restart \n",
+                
+                "#Get ruby code from github \n",
+                "if [[ ", { "Ref" : "Env" }, " == \"Test\" ]] ; then \n",
+                "cd /apps; mkdir code; cd code; git clone https://github.com/sumitnitb/devops-test.git \n",
+                "elif [[ ", { "Ref" : "Env" }, " == \"Staging\" ]] ; then \n",
+                "cd /apps; mkdir code; cd code; git clone https://github.com/sumitnitb/devops-test.git \n",
+                "elif [[ ", { "Ref" : "Env" }, " == \"Prod\" ]] ; then \n",
+                "cd /apps; mkdir code; cd code; git clone https://github.com/sumitnitb/devops-test.git \n",
+                "fi \n",
+                
+                "#Start ruby app \n",
+                "chown -R appuser:appuser /apps \n",
+                "nohup /usr/bin/ruby /apps/code/devops-test/app.rb -o 0.0.0.0 & \n",
+                
+                "#Install AWS CLI \n",
+                "cd /apps; curl 'https://s3.amazonaws.com/aws-cli/awscli-bundle.zip' -o 'awscli-bundle.zip' \n",
+				"unzip awscli-bundle.zip\n",
+				"/apps/awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws\n" ,
+				
+          
+          "# Signal the status from cfn-init\n",
+             "/opt/aws/bin/cfn-signal -e $? ",
+             "         --stack ", { "Ref" : "AWS::StackName" },
+             "         --resource AppServerAutoScalingGroup ",
+             "         --region ", { "Ref" : "AWS::Region" }, "\n"
+               
+              ]
+            ]
+          }
+        }
+      }
+    }
+    
+  },
+  
+  "Outputs": {
+    "WebsiteURL": {
+      "Value": {
+        "Fn::Join": [ "", [ "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]}, ":4567/"  ] ] },
+      "Description": "URL for Instance"
+    }
+  }
+  
+}
